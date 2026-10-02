@@ -1,0 +1,6 @@
+include README.md LICENSE CHANGELOG.md requirements.txt
+recursive-include runraccoon/dashboard/static *
+recursive-include tests *.py
+recursive-include examples *.py
+prune examples/output
+prune docs

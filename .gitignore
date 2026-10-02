@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Run output (from examples / local testing). Never ignore runraccoon/ itself: it is the package.
+examples/output/
+/runraccoon/run-*/
+/runraccoon/latest-run
+/runraccoon/debug.log
+wandb/
+training_progress/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store

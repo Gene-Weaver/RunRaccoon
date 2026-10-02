@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RunRaccoon</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="Runs">
+      <header class="brand">
+        <img src="/static/favicon.svg" alt="" width="26" height="26">
+        <div>
+          <div class="brand-name">RunRaccoon</div>
+          <div class="brand-sub">local runs on this machine</div>
+        </div>
+      </header>
+      <input id="run-filter" class="search" type="search" placeholder="Filter runs" aria-label="Filter runs">
+      <nav id="run-list" class="run-list"></nav>
+    </aside>
+
+    <main class="main">
+      <div id="empty" class="empty">
+        <h1>No run selected</h1>
+        <p>Runs appear here as soon as a script calls <code>runraccoon.init()</code> (or <code>wandb.init()</code> with RunRaccoon installed).</p>
+      </div>
+
+      <section id="run-view" hidden>
+        <header class="run-head">
+          <div class="run-title-row">
+            <h1 id="run-name"></h1>
+            <span id="run-status" class="status"></span>
+          </div>
+          <div id="run-meta" class="run-meta"></div>
+        </header>
+
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="charts" aria-selected="true">Charts</button>
+          <button role="tab" data-tab="media">Media</button>
+          <button role="tab" data-tab="plots">Plots</button>
+          <button role="tab" data-tab="summary">Summary</button>
+          <button role="tab" data-tab="config">Config</button>
+          <button role="tab" data-tab="logs">Logs</button>
+        </div>
+
+        <div class="tab-body" data-panel="charts">
+          <div class="toolbar">
+            <label class="field">Smoothing
+              <input id="smoothing" type="range" min="0" max="0.99" step="0.01" value="0">
+              <output id="smoothing-out">0</output>
+            </label>
+            <input id="chart-filter" class="search small" type="search" placeholder="Filter metrics" aria-label="Filter metrics">
+          </div>
+          <div id="sections"></div>
+        </div>
+        <div class="tab-body" data-panel="media" hidden><div id="media" class="media-grid"></div></div>
+        <div class="tab-body" data-panel="plots" hidden><div id="plots" class="plot-grid"></div></div>
+        <div class="tab-body" data-panel="summary" hidden>
+          <input id="summary-filter" class="search small" type="search" placeholder="Filter keys" aria-label="Filter summary keys">
+          <table id="summary" class="kv"></table>
+        </div>
+        <div class="tab-body" data-panel="config" hidden><table id="config" class="kv"></table></div>
+        <div class="tab-body" data-panel="logs" hidden><pre id="log" class="log"></pre></div>
+      </section>
+    </main>
+  </div>
+  <div id="tooltip" class="tooltip" role="status" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
