@@ -16,7 +16,7 @@ const STATUS = {
 const state = {
   runs: [], selected: null, tab: "charts", detail: null,
   panelsVersion: null, sections: [], media: {}, mediaStep: {},
-  smoothing: 0, chartFilter: "", runFilter: "", collapsed: new Set(), tableView: new Set(),
+  smoothing: 0, chartFilter: "", runFilter: "", collapsed: new Set(), tableView: new Set(), viewer: null,
 };
 
 // ------------------------------------------------------------------------------ utilities
@@ -56,6 +56,12 @@ function fmtTick(v) {
   if (a >= 100) return Math.round(v).toLocaleString();
   return String(+v.toPrecision(3));
 }
+function stamp(t) {          // YYYY/MM/DD HH:MM, local time
+  if (!t) return "–";
+  const d = new Date(t * 1000), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 function duration(s) {
   if (s === null || s === undefined) return "";
   s = Math.max(0, Math.floor(s));
@@ -91,28 +97,65 @@ function niceTicks(lo, hi, count) {
 }
 
 // ------------------------------------------------------------------------------ run list
+function runRow(r) {
+  const [endLabel, endValue] = isActive(r) ? ["estEnd:", r.est_end ? stamp(r.est_end) : "after epoch 1"] : ["End:", stamp(r.ended)];
+  const sub = [el("b", { text: "Start:" }), ` ${stamp(r.started)}  `, el("b", { text: endLabel }), ` ${endValue}`];
+  return el("div", { class: "run-item", "aria-current": r.id === state.selected ? "true" : "false" },
+    el("button", { class: "dot-btn", type: "button", "aria-haspopup": "menu", title: `${r.status} - click to star or hide`,
+      "aria-label": `${r.name}: ${r.status}. Star or hide`, onclick: (e) => { e.stopPropagation(); openRunMenu(r, e.currentTarget); } },
+      el("span", { class: `dot ${r.status}` })),
+    el("button", { class: "run-main", type: "button", title: [r.project, r.run_dir].filter(Boolean).join("\n"),
+      onclick: () => selectRun(r.id) },
+      el("span", { class: "name-row" }, el("span", { class: "name", text: r.name || r.id }),
+        r.starred ? el("span", { class: "star", title: "Starred", text: "★" }) : null),
+      el("span", { class: "sub" }, sub)));
+}
+
 function renderRunList() {
   const nav = $("#run-list");
   const q = state.runFilter.toLowerCase();
   const runs = state.runs.filter((r) => !q || `${r.name} ${r.project} ${r.id} ${r.group || ""}`.toLowerCase().includes(q));
-  const active = runs.filter(isActive), past = runs.filter((r) => !isActive(r));
+  const shown = runs.filter((r) => !r.hidden), hiddenRuns = runs.filter((r) => r.hidden);
+  const active = shown.filter(isActive), past = shown.filter((r) => !isActive(r));
   nav.replaceChildren();
   const group = (label, list) => {
     if (!list.length) return;
     nav.append(el("div", { class: "group-label" }, el("span", { text: label }), el("span", { text: String(list.length) })));
-    for (const r of list) {
-      const sub = [r.project, isActive(r) ? `step ${r.step ?? 0}` : ago(r.finished || r.heartbeat || r.started)]
-        .filter(Boolean).join(" · ");
-      nav.append(el("button", {
-        class: "run-item", "aria-current": r.id === state.selected ? "true" : "false", title: r.run_dir,
-        onclick: () => selectRun(r.id),
-      }, el("span", { class: `dot ${r.status}`, title: r.status }), el("span", { class: "name", text: r.name || r.id }),
-        el("span", { class: "sub", text: sub })));
-    }
+    for (const r of list) nav.append(runRow(r));
   };
   group("Active", active);
   group("Past", past);
-  if (!runs.length) nav.append(el("p", { class: "note", style: "padding: 8px", text: state.runs.length ? "No match." : "No runs yet." }));
+  if (!shown.length) nav.append(el("p", { class: "note", style: "padding: 8px", text: state.runs.length ? "No match." : "No runs yet." }));
+
+  const allHidden = state.runs.filter((r) => r.hidden).length;
+  $("#hidden-runs").hidden = allHidden === 0;
+  const open = $("#hidden-toggle").getAttribute("aria-expanded") === "true";
+  $("#hidden-toggle").replaceChildren(el("span", { text: `${open ? "Hide" : "View"} hidden runs` }),
+    el("span", { class: "count", text: `${allHidden} ${open ? "▾" : "▴"}` }));
+  $("#hidden-list").replaceChildren(...(hiddenRuns.length ? hiddenRuns.map(runRow)
+    : [el("p", { class: "note", style: "padding: 8px", text: "No match." })]));
+}
+
+function openRunMenu(r, anchor) {
+  const menu = $("#run-menu");
+  const item = (label, fn) => el("button", { type: "button", role: "menuitem", text: label, onclick: async () => { closeRunMenu(); await fn(); } });
+  menu.replaceChildren(
+    item(r.starred ? "☆  Unstar" : "★  Star", () => setRunPrefs(r, { starred: !r.starred })),
+    item(r.hidden ? "Unhide" : "Hide", () => setRunPrefs(r, { hidden: !r.hidden })));
+  const box = anchor.getBoundingClientRect();
+  menu.style.left = `${box.left}px`;
+  menu.style.top = `${box.bottom + 4}px`;
+  menu.hidden = false;
+  menu.querySelector("button").focus();
+}
+
+function closeRunMenu() { $("#run-menu").hidden = true; }
+
+async function setRunPrefs(r, prefs) {
+  Object.assign(r, prefs);                             // optimistic; the next refresh confirms
+  renderRunList(); renderHeader();
+  await fetch(`/api/runs/${encodeURIComponent(r.id)}/prefs`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-RunRaccoon": "1" }, body: JSON.stringify(prefs) });
 }
 
 async function refreshRuns() {
@@ -132,8 +175,11 @@ const currentRun = () => state.runs.find((r) => r.id === state.selected);
 // ------------------------------------------------------------------------------ selection
 function selectRun(id, replace = false) {
   if (state.selected !== id) {
+    if ($("#viewer").open) $("#viewer").close();
     state.selected = id;
     state.detail = null; state.panelsVersion = null; state.sections = []; state.media = {}; state.mediaStep = {};
+    state.checkpoint = null; renderCheckpointLegend();
+    GIF.cfg = null; GIF.runId = null; clearInterval(GIF.poll);
     $("#sections").replaceChildren(); $("#media").replaceChildren(); $("#plots").replaceChildren(); $("#log").textContent = "";
   }
   const hash = `#run=${encodeURIComponent(id)}&tab=${state.tab}`;
@@ -155,6 +201,7 @@ function renderHeader() {
   const r = currentRun();
   if (!r) return;
   $("#run-name").textContent = r.name || r.id;
+  $("#run-star").hidden = !r.starred;
   const [icon, label] = STATUS[r.status] || ["?", r.status];
   const st = $("#run-status");
   st.className = `status ${r.status}`;
@@ -183,6 +230,7 @@ async function refreshSelected(force = false) {
     if (state.tab === "charts") await refreshCharts(id);
     else if (state.tab === "media") await refreshMedia(id);
     else if (state.tab === "plots") renderPlots();
+    else if (state.tab === "gifs") { renderGifs(); loadGifControls(); }
     else if (state.tab === "summary") renderKV($("#summary"), state.detail.summary, state.summaryFilter);
     else if (state.tab === "config") renderKV($("#config"), state.detail.config);
     else if (state.tab === "logs") await refreshLog(id);
@@ -196,7 +244,17 @@ async function refreshCharts(id) {
   if (id !== state.selected || data.unchanged) return;
   state.panelsVersion = data.version;
   state.sections = data.sections;
+  state.checkpoint = data.checkpoint || null;
+  renderCheckpointLegend();
   renderSections();
+}
+
+function renderCheckpointLegend() {
+  const c = state.checkpoint, box = $("#checkpoint-legend");
+  box.hidden = !c;
+  if (!c) return;
+  $("#checkpoint-text").replaceChildren("best checkpoint now: ", el("b", { text: c.where }));
+  box.title = `Chosen by ${c.rule} (value ${fmt(c.value)}). Moves whenever a later step becomes the best.`;
 }
 
 function renderSections() {
@@ -293,6 +351,11 @@ function drawCard(card, cardWidth) {
   }
   axis.append(el("svg:line", { x1: m.l, x2: m.l + iw, y1: m.t + ih, y2: m.t + ih, "stroke-width": 1, "shape-rendering": "crispEdges" }));
   svg.append(grid, axis);
+  if (state.checkpoint && p.checkpoint_x !== undefined && p.checkpoint_x >= x0 && p.checkpoint_x <= x1) {
+    const cx = sx(p.checkpoint_x);
+    svg.append(el("svg:line", { x1: cx, x2: cx, y1: m.t, y2: m.t + ih, stroke: css("--checkpoint"), "stroke-width": 1.5,
+      opacity: 0.9, "aria-label": `best checkpoint at ${p.x_label} ${p.checkpoint_x}` }));
+  }
 
   // lines
   const pathOf = (x, y) => {
@@ -386,24 +449,143 @@ function renderMedia() {
     const card = el("div", { class: "card media-card" });
     card.append(el("div", { class: "card-head" }, el("span", { class: "card-title", text: key }),
       el("span", { class: "card-note", text: `${steps.length} step${steps.length === 1 ? "" : "s"}` })));
-    for (const m of current) {
-      const src = `/files/${encodeURIComponent(state.selected)}/${m.path.split("/").map(encodeURIComponent).join("/")}`;
-      card.append(el("a", { href: src, target: "_blank", rel: "noopener" }, el("img", { src, alt: m.caption || key, loading: "lazy" })));
+    current.forEach((m, i) => {
+      card.append(el("button", { class: "img-btn", title: "Open larger", onclick: () => openViewer({ kind: "media", key, index: i }) },
+        el("img", { src: fileUrl(m.path), alt: m.caption || key, loading: "lazy" })));
       if (m.caption) card.append(el("div", { class: "caption", text: m.caption }));
-    }
+    });
     if (steps.length > 1) {
       const out = el("output", { text: `step ${step}` });
       const slider = el("input", { type: "range", min: 0, max: steps.length - 1, step: 1, value: steps.indexOf(step), "aria-label": `${key} step` });
-      slider.addEventListener("input", () => {
-        const i = +slider.value;
-        state.mediaStep[key] = i === steps.length - 1 ? "latest" : steps[i];
-        renderMedia();
-      });
+      slider.addEventListener("input", () => setMediaStep(key, steps, +slider.value));
       card.append(el("div", { class: "media-controls" }, el("span", { text: `${steps[0]}` }), slider, out));
     }
     return card;
   });
   root.replaceChildren(...cards);
+  if (state.viewer && state.viewer.kind === "media") renderViewer();
+}
+
+const fileUrl = (path, bust) => `/files/${encodeURIComponent(state.selected)}/${path.split("/").map(encodeURIComponent).join("/")}${bust ? `?t=${bust}` : ""}`;
+
+// Shared by the card slider and the viewer slider: the last step is stored as "latest" so live runs keep following new steps.
+function setMediaStep(key, steps, i) {
+  i = Math.max(0, Math.min(steps.length - 1, i));
+  state.mediaStep[key] = i === steps.length - 1 ? "latest" : steps[i];
+  renderMedia();
+}
+
+function mediaSteps(key) {
+  const items = state.media[key] || [];
+  const steps = [...new Set(items.map((m) => m.step))].sort((a, b) => a - b);
+  const sel = state.mediaStep[key];
+  const step = sel === undefined || sel === "latest" || !steps.includes(sel) ? steps[steps.length - 1] : sel;
+  return { items, steps, step, current: items.filter((m) => m.step === step) };
+}
+
+// ------------------------------------------------------------------------- image viewer
+function openViewer(v) {
+  state.viewer = v;
+  renderViewer();
+  const dlg = $("#viewer");
+  if (!dlg.open) dlg.showModal();
+}
+
+function renderViewer() {
+  const v = state.viewer;
+  const dlg = $("#viewer");
+  if (!v) return;
+  const img = $("#viewer-img"), slider = $("#viewer-slider");
+  dlg.classList.toggle("plot", v.kind === "plot");
+  dlg.classList.toggle("gif", v.kind === "gif");
+  if (v.kind === "media") {
+    const { steps, step, current } = mediaSteps(v.key);
+    if (!current.length) return;
+    v.index = Math.min(v.index, current.length - 1);
+    const m = current[v.index];
+    const si = steps.indexOf(step);
+    $("#viewer-title").textContent = v.key;
+    $("#viewer-note").textContent = `step ${step} · ${steps.length} step${steps.length === 1 ? "" : "s"}`;
+    img.src = fileUrl(m.path);
+    img.alt = m.caption || v.key;
+    $("#viewer-open").href = fileUrl(m.path);
+    $("#viewer-caption").textContent = m.caption || "";
+    $("#viewer-pager").hidden = current.length < 2;
+    $("#viewer-index").textContent = `image ${v.index + 1} of ${current.length}`;
+    $("#viewer-iprev").disabled = v.index === 0;
+    $("#viewer-inext").disabled = v.index >= current.length - 1;
+    $("#viewer-controls").hidden = steps.length < 2;
+    slider.max = String(steps.length - 1);
+    slider.value = String(si);
+    slider.setAttribute("aria-label", `${v.key} step`);
+    $("#viewer-step").textContent = `step ${step}`;
+    $("#viewer-prev").disabled = si <= 0;
+    $("#viewer-next").disabled = si >= steps.length - 1;
+    for (const n of [steps[si - 1], steps[si + 1]]) {          // preload neighbors so scrubbing is instant
+      const nm = n === undefined ? null : mediaStepItems(v.key, n)[v.index];
+      if (nm) new Image().src = fileUrl(nm.path);
+    }
+  } else {
+    const plots = (state.detail && state.detail[v.kind === "gif" ? "gifs" : "plots"]) || [];
+    if (!plots.length) return;
+    v.index = Math.max(0, Math.min(v.index, plots.length - 1));
+    const p = plots[v.index];
+    const src = fileUrl(p.path, Math.floor(p.mtime));
+    const noun = v.kind === "gif" ? "GIF" : "figure";
+    $("#viewer-title").textContent = p.path.replace(/^plots\/(gifs\/)?/, "");
+    $("#viewer-note").textContent = `${noun} ${v.index + 1} of ${plots.length} · ${new Date(p.mtime * 1000).toLocaleTimeString()}`;
+    img.src = src;
+    img.alt = p.path;
+    $("#viewer-open").href = src;
+    $("#viewer-caption").textContent = "";
+    $("#viewer-pager").hidden = true;
+    $("#viewer-controls").hidden = plots.length < 2;
+    slider.max = String(plots.length - 1);
+    slider.value = String(v.index);
+    slider.setAttribute("aria-label", noun);
+    $("#viewer-step").textContent = `${noun} ${v.index + 1}`;
+    $("#viewer-prev").disabled = v.index === 0;
+    $("#viewer-next").disabled = v.index >= plots.length - 1;
+  }
+}
+
+const mediaStepItems = (key, step) => (state.media[key] || []).filter((m) => m.step === step);
+
+function viewerStep(delta, absolute) {
+  const v = state.viewer;
+  if (!v) return;
+  if (v.kind === "media") {
+    const { steps, step } = mediaSteps(v.key);
+    setMediaStep(v.key, steps, absolute !== undefined ? absolute : steps.indexOf(step) + delta);
+  } else {
+    v.index = absolute !== undefined ? absolute : v.index + delta;
+    renderViewer();
+  }
+}
+
+function viewerImage(delta) {
+  const v = state.viewer;
+  if (!v || v.kind !== "media") return;
+  const n = mediaSteps(v.key).current.length;
+  v.index = Math.max(0, Math.min(n - 1, v.index + delta));
+  renderViewer();
+}
+
+function initViewer() {
+  const dlg = $("#viewer");
+  $("#viewer-close").addEventListener("click", () => dlg.close());
+  $("#viewer-prev").addEventListener("click", () => viewerStep(-1));
+  $("#viewer-next").addEventListener("click", () => viewerStep(1));
+  $("#viewer-iprev").addEventListener("click", () => viewerImage(-1));
+  $("#viewer-inext").addEventListener("click", () => viewerImage(1));
+  $("#viewer-slider").addEventListener("input", (e) => viewerStep(0, +e.target.value));
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) dlg.close(); });      // click on the backdrop
+  dlg.addEventListener("close", () => { state.viewer = null; $("#viewer-img").removeAttribute("src"); });
+  dlg.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;   // slider handles its own
+    const map = { ArrowLeft: () => viewerStep(-1), ArrowRight: () => viewerStep(1), ArrowUp: () => viewerImage(-1), ArrowDown: () => viewerImage(1) };
+    if (map[e.key]) { e.preventDefault(); map[e.key](); }
+  });
 }
 
 // ----------------------------------------------------------------------- plots, kv, logs
@@ -411,12 +593,242 @@ function renderPlots() {
   const root = $("#plots");
   const plots = (state.detail && state.detail.plots) || [];
   if (!plots.length) { root.replaceChildren(el("p", { class: "note", text: "No figures rendered yet - progress.png appears after the first epoch." })); return; }
-  root.replaceChildren(...plots.map((p) => {
-    const src = `/files/${encodeURIComponent(state.selected)}/${p.path.split("/").map(encodeURIComponent).join("/")}?t=${Math.floor(p.mtime)}`;
+  root.replaceChildren(...plots.map((p, i) => {
+    const src = fileUrl(p.path, Math.floor(p.mtime));
     return el("div", { class: "card plot-card" },
       el("div", { class: "card-head" }, el("span", { class: "card-title", text: p.path.replace(/^plots\//, "") }),
         el("span", { class: "card-note", text: new Date(p.mtime * 1000).toLocaleTimeString() })),
-      el("a", { href: src, target: "_blank", rel: "noopener" }, el("img", { src, alt: p.path, loading: "lazy" })));
+      el("button", { class: "img-btn", title: "Open larger", onclick: () => openViewer({ kind: "plot", index: i }) },
+        el("img", { src, alt: p.path, loading: "lazy" })));
+  }));
+  if (state.viewer && state.viewer.kind === "plot") renderViewer();
+}
+
+// ------------------------------------------------------------------- GIF controller
+const GIF = { cfg: null, opts: null, style: null, runId: null, previewTimer: null, poll: null };
+const GIF_DEFAULTS = { seconds_per_frame: 0.25, orientation: "landscape", resolution: 1080, hold_last_s: 1.5, panels: true, label: true };
+const STYLE_DEFAULTS = { line_width: 2, point_size: 4, opacity: 0.95, fill_opacity: 0.3, show_gt: true, show_pred: true,
+                         show_labels: true, halo: true, colors: {}, hidden: [] };
+
+async function loadGifControls(force = false) {
+  const id = state.selected;
+  if (!id || (!force && GIF.runId === id && GIF.cfg)) return renderGifControls();
+  GIF.cfg = await getJSON(`/api/runs/${encodeURIComponent(id)}/gifs/config`);
+  if (id !== state.selected) return;
+  GIF.runId = id;
+  GIF.opts = { ...GIF.cfg.options };
+  GIF.style = JSON.parse(JSON.stringify(GIF.cfg.style));
+  renderGifControls();
+  if (GIF.cfg.job && GIF.cfg.job.state === "running") pollGifJob();
+}
+
+function gifRequest() {
+  const o = GIF.opts;
+  return { options: { seconds_per_frame: o.seconds_per_frame, orientation: o.orientation, resolution: o.resolution,
+                      hold_last_s: o.hold_last_s, panels: o.panels, label: o.label },
+           style: GIF.cfg.restylable.length ? GIF.style : null };
+}
+
+function schedulePreview() {
+  clearTimeout(GIF.previewTimer);
+  GIF.previewTimer = setTimeout(() => {
+    const img = $("#gif-preview");
+    if (!img) return;
+    const r = gifRequest();
+    img.classList.add("loading");
+    img.src = `/api/runs/${encodeURIComponent(state.selected)}/gifs/preview?options=${encodeURIComponent(JSON.stringify({ ...r.options, style: r.style }))}`;
+  }, 350);
+}
+
+function control(label, input, value) {
+  return el("label", { class: "gc-field" }, el("span", { class: "gc-label", text: label }), input, value || "");
+}
+
+function rangeCtl(label, get, set, min, max, step, unit = "") {
+  const out = el("output", { class: "gc-value", text: `${get()}${unit}` });
+  const input = el("input", { type: "range", min, max, step, value: get(), "aria-label": label });
+  input.addEventListener("input", () => { set(+input.value); out.textContent = `${input.value}${unit}`; schedulePreview(); });
+  return control(label, input, out);
+}
+
+function checkCtl(label, get, set) {
+  const input = el("input", { type: "checkbox" });
+  input.checked = !!get();
+  input.addEventListener("change", () => { set(input.checked); schedulePreview(); });
+  return el("label", { class: "gc-check" }, input, label);
+}
+
+function renderGifControls() {
+  const box = $("#gif-controls");
+  const cfg = GIF.cfg;
+  if (!cfg) { box.replaceChildren(el("p", { class: "note", text: "Loading GIF settings…" })); return; }
+  if (!cfg.keys.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const o = GIF.opts, st = GIF.style;
+  const seg = el("div", { class: "gc-seg", role: "group", "aria-label": "Orientation" },
+    ["landscape", "portrait"].map((v) => el("button", {
+      type: "button", "aria-pressed": String(o.orientation === v), text: v === "landscape" ? "Landscape" : "Portrait",
+      onclick: () => { o.orientation = v; renderGifControls(); schedulePreview(); },
+    })));
+  const res = el("select", { "aria-label": "Resolution" }, [720, 1080, 1440, 2160].map((r) =>
+    el("option", { value: r, selected: o.resolution === r, text: `${r}p` })));
+  res.addEventListener("change", () => { o.resolution = +res.value; schedulePreview(); });
+
+  const general = el("div", { class: "gc-row" },
+    rangeCtl("Speed", () => o.seconds_per_frame, (v) => (o.seconds_per_frame = v), 0.05, 1.5, 0.05, " s/frame"),
+    rangeCtl("Hold last frame", () => o.hold_last_s, (v) => (o.hold_last_s = v), 0, 5, 0.25, " s"),
+    control("Orientation", seg), control("Resolution", res),
+    checkCtl("Per-panel GIFs", () => o.panels, (v) => (o.panels = v)),
+    checkCtl("Title & progress bar", () => o.label, (v) => (o.label = v)));
+
+  let styleRow;
+  if (cfg.restylable.length) {
+    const colorsBtn = el("button", { type: "button", class: "gc-btn", "aria-expanded": "false",
+      onclick: (e) => toggleColors(e.currentTarget) },
+      el("span", { class: "gc-swatches" }, cfg.features.slice(0, 6).map((f) =>
+        el("span", { style: `background:${st.colors[f.id] || f.color}` }))),
+      `Colors (${cfg.features.length})`);
+    st.hidden = st.hidden || [];
+    const nShown = cfg.features.filter((f) => !st.hidden.includes(f.id)).length;
+    const showBtn = el("button", { type: "button", class: "gc-btn", "aria-expanded": "false",
+      onclick: (e) => toggleShown(e.currentTarget) }, `Show (${nShown}/${cfg.features.length})`);
+    styleRow = el("div", { class: "gc-row" },
+      rangeCtl("Line width", () => st.line_width, (v) => (st.line_width = v), 0.5, 8, 0.5, " px"),
+      rangeCtl("Point size", () => st.point_size, (v) => (st.point_size = v), 1, 16, 0.5, " px"),
+      rangeCtl("Opacity", () => st.opacity, (v) => (st.opacity = v), 0.1, 1, 0.05),
+      rangeCtl("Mask fill", () => st.fill_opacity, (v) => (st.fill_opacity = v), 0, 0.8, 0.05),
+      checkCtl("Ground truth", () => st.show_gt, (v) => (st.show_gt = v)),
+      checkCtl("Predictions", () => st.show_pred, (v) => (st.show_pred = v)),
+      checkCtl("Labels", () => st.show_labels, (v) => (st.show_labels = v)),
+      checkCtl("Dark outline", () => st.halo, (v) => (st.halo = v)),
+      colorsBtn, showBtn);
+  } else {
+    styleRow = el("p", { class: "note gc-note", text: "Overlays in these images were drawn by the training script, so only speed, orientation and size can change. Line, opacity and color controls apply to RunRaccoon's QC contact sheets (Ultralytics runs)." });
+  }
+
+  const job = (cfg.job && cfg.job.state === "running") ? cfg.job : null;
+  const go = el("button", { type: "button", class: "gc-primary", disabled: !!job, text: job ? "Regenerating…" : "Regenerate GIFs",
+    onclick: startGifJob });
+  const reset = el("button", { type: "button", class: "gc-btn", text: "Reset to defaults", title: "Default speed, size and overlay style (then Regenerate)",
+    onclick: () => { GIF.opts = { ...GIF.opts, ...GIF_DEFAULTS }; GIF.style = JSON.parse(JSON.stringify(STYLE_DEFAULTS)); renderGifControls(); } });
+  const status = el("div", { class: "gc-status", id: "gif-status" });
+  box.replaceChildren(
+    el("div", { class: "gc-head" }, el("span", { class: "card-title", text: "GIF settings" }),
+      el("span", { class: "card-note", text: cfg.restylable.length ? `restylable: ${cfg.restylable.join(", ")}` : cfg.keys.join(", ") })),
+    el("div", { class: "gc-body" },
+      el("div", { class: "gc-form" }, general, styleRow, el("div", { class: "gc-actions" }, go, reset, status)),
+      el("figure", { class: "gc-preview" }, el("img", { id: "gif-preview", alt: "Preview of the last frame with these settings",
+        onload: (e) => e.target.classList.remove("loading") }), el("figcaption", { text: "preview · last frame" }))));
+  updateGifStatus(cfg.job);
+  schedulePreview();
+}
+
+function toggleColors(btn) {
+  const existing = $("#gc-colors");
+  if (existing) { existing.remove(); btn.setAttribute("aria-expanded", "false"); return; }
+  $("#gc-shown")?.remove();
+  btn.setAttribute("aria-expanded", "true");
+  const st = GIF.style;
+  const pop = el("div", { id: "gc-colors", class: "gc-colors", role: "dialog", "aria-label": "Overlay colors" },
+    el("div", { class: "gc-colors-grid" }, GIF.cfg.features.map((f) => {
+      const input = el("input", { type: "color", value: st.colors[f.id] || f.color, "aria-label": f.label });
+      input.addEventListener("input", () => { st.colors[f.id] = input.value; schedulePreview(); });
+      return el("label", { class: "gc-color" }, input, el("span", { text: f.label }));
+    })),
+    el("div", { class: "gc-colors-foot" },
+      el("button", { type: "button", class: "gc-btn", text: "Reset colors",
+        onclick: () => { st.colors = {}; $("#gc-colors").remove(); renderGifControls(); } }),
+      el("button", { type: "button", class: "gc-btn", text: "Done", onclick: () => { $("#gc-colors").remove(); renderGifControls(); } })));
+  btn.closest(".gc-row").append(pop);
+}
+
+function toggleShown(btn) {
+  const existing = $("#gc-shown");
+  if (existing) { existing.remove(); btn.setAttribute("aria-expanded", "false"); return; }
+  $("#gc-colors")?.remove();
+  btn.setAttribute("aria-expanded", "true");
+  const st = GIF.style;
+  const setAll = (on) => { st.hidden = on ? [] : GIF.cfg.features.map((f) => f.id); $("#gc-shown").remove(); renderGifControls(); schedulePreview(); };
+  const pop = el("div", { id: "gc-shown", class: "gc-colors", role: "dialog", "aria-label": "Which overlays are drawn" },
+    el("div", { class: "gc-colors-grid" }, GIF.cfg.features.map((f) => {
+      const input = el("input", { type: "checkbox" });
+      input.checked = !st.hidden.includes(f.id);
+      input.addEventListener("change", () => {
+        st.hidden = input.checked ? st.hidden.filter((h) => h !== f.id) : [...new Set([...st.hidden, f.id])];
+        btn.lastChild.textContent = `Show (${GIF.cfg.features.length - st.hidden.length}/${GIF.cfg.features.length})`;
+        schedulePreview();
+      });
+      return el("label", { class: "gc-color gc-toggle" }, input,
+        el("span", { class: "gc-dot", style: `background:${st.colors[f.id] || f.color}` }), el("span", { text: f.label }));
+    })),
+    el("div", { class: "gc-colors-foot" },
+      el("button", { type: "button", class: "gc-btn", text: "Show all", onclick: () => setAll(true) }),
+      el("button", { type: "button", class: "gc-btn", text: "Hide all", onclick: () => setAll(false) }),
+      el("button", { type: "button", class: "gc-btn", text: "Done", onclick: () => { $("#gc-shown").remove(); renderGifControls(); } })));
+  btn.closest(".gc-row").append(pop);
+}
+
+function updateGifStatus(job) {
+  const s = $("#gif-status");
+  if (!s) return;
+  if (!job) { s.replaceChildren(); return; }
+  if (job.state === "running") {
+    const pct = job.total ? Math.round((100 * job.done) / job.total) : 0;
+    s.replaceChildren(el("div", { class: "gc-bar" }, el("span", { style: `width:${pct}%` })),
+      el("span", { text: job.total ? `${job.done} of ${job.total} GIFs` : "starting…" }));
+  } else if (job.state === "done") {
+    s.replaceChildren(el("span", { text: `✓ ${job.written} GIFs regenerated` }));
+  } else if (job.state === "error") {
+    s.replaceChildren(el("span", { class: "gc-error", text: `✕ ${job.error}` }));
+  }
+}
+
+async function startGifJob() {
+  const id = state.selected;
+  const r = await fetch(`/api/runs/${encodeURIComponent(id)}/gifs/render`, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-RunRaccoon": "1" }, body: JSON.stringify(gifRequest()) });
+  const data = await r.json();
+  GIF.cfg.job = data.job;
+  renderGifControls();
+  pollGifJob();
+}
+
+function pollGifJob() {
+  clearInterval(GIF.poll);
+  GIF.poll = setInterval(async () => {
+    const id = state.selected;
+    const cfg = await getJSON(`/api/runs/${encodeURIComponent(id)}/gifs/config`);
+    if (id !== state.selected) return clearInterval(GIF.poll);
+    GIF.cfg.job = cfg.job;
+    updateGifStatus(cfg.job);
+    if (!cfg.job || cfg.job.state !== "running") {
+      clearInterval(GIF.poll);
+      const btn = $(".gc-primary");
+      if (btn) { btn.disabled = false; btn.textContent = "Regenerate GIFs"; }
+      state.detail = await getJSON(`/api/runs/${encodeURIComponent(id)}`);
+      renderGifs();
+    }
+  }, 1000);
+}
+
+function renderGifs() {
+  const root = $("#gifs");
+  const gifs = (state.detail && state.detail.gifs) || [];
+  if (!gifs.length) {
+    root.replaceChildren(el("p", { class: "note", text: "No GIFs yet - they are made when a run finishes, from images logged at several steps (or run `runraccoon gif <run dir>`)." }));
+    return;
+  }
+  // Keep cards (and their playing GIFs) when nothing changed, so live refreshes don't restart them.
+  const sig = gifs.map((g) => `${g.path}@${Math.floor(g.mtime)}`).join("|");
+  if (root.dataset.sig === sig) return;
+  root.dataset.sig = sig;
+  root.replaceChildren(...gifs.map((g, i) => {
+    const name = g.path.replace(/^plots\/gifs\//, "");
+    return el("div", { class: "card plot-card gif-card" },
+      el("div", { class: "card-head" }, el("span", { class: "card-title", title: name, text: name }),
+        el("span", { class: "card-note", text: `${(g.size / 1e6).toFixed(1)} MB` })),
+      el("button", { class: "img-btn", title: "Open larger", onclick: () => openViewer({ kind: "gif", index: i }) },
+        el("img", { src: fileUrl(g.path, Math.floor(g.mtime)), alt: name, loading: "lazy" })));
   }));
 }
 
@@ -445,6 +857,16 @@ function readHash() {
 }
 
 function init() {
+  initViewer();
+  $("#hidden-toggle").addEventListener("click", () => {
+    const b = $("#hidden-toggle"), open = b.getAttribute("aria-expanded") !== "true";
+    b.setAttribute("aria-expanded", String(open));
+    $("#hidden-list").hidden = !open;
+    $("#hidden-runs").classList.toggle("open", open);
+    renderRunList();
+  });
+  document.addEventListener("click", (e) => { if (!$("#run-menu").hidden && !e.target.closest("#run-menu")) closeRunMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRunMenu(); });
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => setTab(b.dataset.tab));
   $("#run-filter").addEventListener("input", (e) => { state.runFilter = e.target.value; renderRunList(); });
   $("#chart-filter").addEventListener("input", (e) => { state.chartFilter = e.target.value; renderSections(); });

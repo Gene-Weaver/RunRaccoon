@@ -49,3 +49,36 @@ def test_include_globs():
     rows = rows_of(3, **{"train/loss": lambda i: i, "val/acc": lambda i: i, "other": lambda i: i})
     titles = {p.title for p in flat_panels(build_sections(rows, include=["val/*"]))}
     assert titles == {"acc"}
+
+
+def test_best_checkpoint_ultralytics_version_rules():
+    from runraccoon.panels import best_checkpoint
+    rows = [
+        {"_step": 1, "train/box_loss": 1, "metrics/mAP50(B)": 0.5, "metrics/mAP50-95(B)": 0.3, "metrics/mAP50-95(P)": 0.2},
+        {"_step": 2, "train/box_loss": 1, "metrics/mAP50(B)": 0.9, "metrics/mAP50-95(B)": 0.3, "metrics/mAP50-95(P)": 0.2},
+        {"_step": 3, "train/box_loss": 1, "metrics/mAP50(B)": 0.1, "metrics/mAP50-95(B)": 0.4, "metrics/mAP50-95(P)": 0.2},
+        {"_step": 4, "metrics/mAP50(B)": 0.9, "metrics/mAP50-95(B)": 0.9, "metrics/mAP50-95(P)": 0.9},  # re-val of best.pt
+    ]
+    new = best_checkpoint(rows, ultralytics_ver="8.4.160")
+    assert new["row"]["_step"] == 3 and abs(new["value"] - 0.6) < 1e-9 and new["source"] == "ultralytics"
+    old = best_checkpoint(rows, ultralytics_ver="8.3.197")          # 0.1*mAP50 + 0.9*mAP50-95
+    assert old["row"]["_step"] == 3 and abs(old["value"] - 0.55) < 1e-9
+
+
+def test_best_checkpoint_define_metric_and_ties():
+    from runraccoon.panels import best_checkpoint
+    rows = [{"_step": 0, "val/loss": 2.0, "val/acc": 0.5}, {"_step": 1, "val/loss": 1.0, "val/acc": 0.7},
+            {"_step": 2, "val/loss": 1.0, "val/acc": 0.9}]
+    assert best_checkpoint(rows)["row"]["_step"] == 1                                   # min val/loss, earliest tie
+    assert best_checkpoint(rows, [{"name": "val/acc", "summary": "max"}])["row"]["_step"] == 2
+    assert best_checkpoint([{"_step": 0, "train/loss": 1.0}]) is None
+
+
+def test_post_training_revalidation_and_constant_series():
+    from runraccoon.panels import training_rows
+    rows = [{"_step": s, "train/loss": 1.0 / s, "val/loss": 2.0 / s, "val/zero": 0.0} for s in range(1, 4)]
+    rows.append({"_step": 4, "metrics/mAP50-95(B)": 0.9, "val/loss": 0.1})        # Ultralytics' best.pt re-val
+    kept = training_rows(rows, {"epochs": 3})
+    assert [r["_step"] for r in kept] == [1, 2, 3]
+    panels = {p.title: p for p in flat_panels(build_sections(kept))}
+    assert panels["loss"].best()[1] == 3 and panels["zero"].best() is None

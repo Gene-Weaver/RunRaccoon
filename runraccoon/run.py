@@ -96,8 +96,9 @@ class Run:
             from runraccoon.console import ConsoleCapture
             self._console = ConsoleCapture(self.paths.output_log)
         self.paths.link_latest()
-        self._metadata_thread = threading.Thread(target=self._write_metadata, name="runraccoon-metadata", daemon=True)
-        self._metadata_thread.start()
+        # Synchronous on purpose (~0.5 s): running nvidia-smi / git from a background thread races with
+        # the DataLoader forking workers from the main thread (see plotting/scheduler.py).
+        self._write_metadata()
 
         from runraccoon.plotting.scheduler import PlotScheduler
         self._scheduler = PlotScheduler(self.paths.run_dir, self.paths.logs / "plots.log",
@@ -277,7 +278,6 @@ class Run:
             self._history.close()
         self._write_summary(final=True)
         self._write_config()
-        self._metadata_thread.join(timeout=15)
 
         status = "finished" if code == 0 else "failed"
         ok = self._scheduler.finish(final=self.settings.final_plots, formats=tuple(self.settings.plot_formats),
@@ -394,6 +394,7 @@ class Run:
                     "start_time": self.start_time, "project": self.project, "run_name": self.name,
                     "group": self.group, "job_type": self.job_type, "tags": list(self.tags), "notes": self.notes,
                     "m": self._metric_defs, "live_metrics": list(self.settings.live_metrics or []) or None,
+                    "gif": self.settings.gif_options(),
                     "runraccoon": True}
         doc = {"_wandb": {"value": internal}}
         for k, v in self.config.as_dict().items():
@@ -420,9 +421,11 @@ class Run:
         self._log_handler = handler
 
     def _register(self) -> None:
+        previous = registry.read(self.id) if self.resumed else None
+        started = min(previous.get("started") or self.start_time, self.start_time) if previous else self.start_time
         registry.write({"id": self.id, "name": self.name, "project": self.project, "group": self.group,
                         "job_type": self.job_type, "tags": list(self.tags), "run_dir": str(self.paths.run_dir),
-                        "pid": os.getpid(), "host": socket.gethostname(), "started": self.start_time,
+                        "pid": os.getpid(), "host": socket.gethostname(), "started": started,     # a resume keeps the original start
                         "heartbeat": time.time(), "state": "running", "exit_code": None, "step": self._step,
                         "resumed": self.resumed, "program": getattr(sys.modules.get("__main__"), "__file__", None)})
 

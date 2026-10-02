@@ -3,6 +3,7 @@
     runraccoon dashboard [--port 8473]     open the localhost dashboard (all runs, live + past)
     runraccoon ls [--all]                  list runs and their status
     runraccoon replot <run dir | id>       re-render every figure for a run (e.g. after a crash)
+    runraccoon gif <run dir | id>          (re)make the training-progress GIFs of a run's QC images
     runraccoon register <dir>...           add existing run folders (moved / copied) to the dashboard
     runraccoon forget <id>...              remove runs from the dashboard index (files are kept)
     runraccoon gc                          forget runs whose folders no longer exist
@@ -74,9 +75,34 @@ def cmd_replot(args) -> int:
     from runraccoon.plotting.render import render_run
     run_dir = _resolve_run_dir(args.target)
     written = render_run(run_dir, final=True, formats=[f for f in args.formats.split(",") if f],
-                         status=args.status)
+                         status=args.status, gifs=not args.no_gifs)
     for p in written:
         print(p)
+    return 0
+
+
+def cmd_gif(args) -> int:
+    from runraccoon.panels import x_label_hint
+    from runraccoon.plotting.gifs import render_gifs, saved_options
+    from runraccoon.reader import RunData
+    data = RunData(_resolve_run_dir(args.target))
+    opts = saved_options(data)                       # run config + the dashboard's last regeneration settings
+    if args.defaults:
+        from runraccoon.plotting.gifs import GifOptions
+        opts = GifOptions()
+    for name in ("seconds_per_frame", "orientation", "resolution", "hold_last_s", "keys", "max_frames", "workers"):
+        v = getattr(args, name)
+        if v is not None:
+            setattr(opts, name, tuple(p for p in v.split(",") if p) if name == "keys" else v)
+    if args.no_panels:
+        opts.panels = False
+    if args.no_label:
+        opts.label = False
+    written = render_gifs(data, opts, x_word=x_label_hint(data.rows, data.config) or "step")
+    for p in written:
+        print(p)
+    print(f"{len(written)} GIF(s) at {opts.canvas[0]}x{opts.canvas[1]}, {opts.seconds_per_frame}s per frame"
+          if written else "no image key was logged at enough steps to animate")
     return 0
 
 
@@ -138,7 +164,22 @@ def main(argv=None) -> int:
     p.add_argument("target", help="run directory, its runraccoon/ folder, the output dir, or a run id")
     p.add_argument("--formats", default="png", help="comma-separated, e.g. png,pdf,svg")
     p.add_argument("--status", default=None)
+    p.add_argument("--no-gifs", action="store_true", help="figures only; leave the GIFs as they are")
     p.set_defaults(fn=cmd_replot)
+
+    p = sub.add_parser("gif", help="(re)make training-progress GIFs from a run's QC images")
+    p.add_argument("target", help="run directory, its runraccoon/ folder, the output dir, or a run id")
+    p.add_argument("--seconds", dest="seconds_per_frame", type=float, default=None, help="seconds per step (default 0.25)")
+    p.add_argument("--orientation", choices=("landscape", "portrait"), default=None)
+    p.add_argument("--resolution", type=int, default=None, help="short side in px (default 1080)")
+    p.add_argument("--hold", dest="hold_last_s", type=float, default=None, help="pause on the last frame, s (default 1.5)")
+    p.add_argument("--keys", default=None, help="comma-separated glob patterns of image keys, e.g. qc/*")
+    p.add_argument("--max-frames", dest="max_frames", type=int, default=None, help="subsample longer runs (default 400)")
+    p.add_argument("--workers", type=int, default=None, help="parallel workers (default: max(cores, threads) - 2)")
+    p.add_argument("--defaults", action="store_true", help="ignore saved settings and use the defaults")
+    p.add_argument("--no-panels", action="store_true", help="skip the per-panel GIFs")
+    p.add_argument("--no-label", action="store_true", help="no title / step banner / progress bar")
+    p.set_defaults(fn=cmd_gif)
 
     p = sub.add_parser("render", help=argparse.SUPPRESS)
     p.add_argument("run_dir")

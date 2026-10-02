@@ -228,8 +228,27 @@ def chart_figure(table: dict, meta: dict, key: str) -> Figure | None:
         i = idx.get(name)
         return [r[i] for r in data] if i is not None else None
 
-    fig = Figure(figsize=(4.4, 3.3))
-    ax = fig.add_axes([0.14, 0.15, 0.82, 0.7])
+    n_rows = len(data)
+    if kind == "bar":                                   # one row per class: grow with the class count
+        h = max(3.3, 0.24 * n_rows + 1.1)
+        fig = Figure(figsize=(5.2, h))
+        ax = fig.add_axes([0.3, 0.6 / h, 0.62, 1 - 1.3 / h])
+    elif kind == "heatmap":
+        n = len({r[idx[f.get("x")]] for r in data}) if f.get("x") in idx else 8
+        side = max(4.4, 0.28 * n + 2.2)
+        fig = Figure(figsize=(side, side * 0.92))
+        ax = fig.add_axes([0.26, 0.24, 0.7, 0.68])
+    elif kind == "scatter" and f.get("series"):
+        n_series = len({r[idx[f["series"]]] for r in data}) if f["series"] in idx else 1
+        if n_series > 14:                               # two legend columns: give them room
+            fig = Figure(figsize=(9.2, 4.8))
+            ax = fig.add_axes([0.07, 0.11, 0.5, 0.79])
+        else:
+            fig = Figure(figsize=(6.6, 4.4))
+            ax = fig.add_axes([0.1, 0.12, 0.58, 0.78])
+    else:
+        fig = Figure(figsize=(4.4, 3.3))
+        ax = fig.add_axes([0.14, 0.15, 0.82, 0.7])
     title = meta.get("title") or key.rsplit("/", 1)[-1]
 
     if kind == "line":
@@ -272,7 +291,25 @@ def chart_figure(table: dict, meta: dict, key: str) -> Figure | None:
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1.02)
     elif kind == "scatter":
-        ax.scatter(col(f.get("x")), col(f.get("y")), s=14, color=PALETTE[0], alpha=0.75, edgecolors=SURFACE, linewidths=0.6)
+        xs, ys = col(f.get("x")), col(f.get("y"))
+        if f.get("series"):                             # one color per class, legend outside the plot
+            from runraccoon.qc import feature_color
+            groups: dict = {}
+            for g, x, y in zip(col(f["series"]), xs, ys):
+                groups.setdefault(str(g), ([], []))
+                groups[str(g)][0].append(x)
+                groups[str(g)][1].append(y)
+            order = sorted(groups, key=lambda g: -len(groups[g][0]))         # legend: most points first
+            ids = {str(n): i for i, n in enumerate(f.get("series_order") or [])}  # colors follow class ids
+            style = {"colors": {}}
+            for i, g in enumerate(order):
+                c = ids.get(g, i)
+                ax.scatter(*groups[g], s=7, alpha=0.6, linewidths=0, label=f"{g} ({len(groups[g][0])})",
+                           color=feature_color(style, f"class:{c}", c))
+            ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), fontsize=6, markerscale=2, frameon=False,
+                      ncol=1 if len(order) <= 14 else 2, handletextpad=0.3, borderaxespad=0, columnspacing=1.0)
+        else:
+            ax.scatter(xs, ys, s=14, color=PALETTE[0], alpha=0.75, edgecolors=SURFACE, linewidths=0.6)
     elif kind == "bar":
         labels_, values = col(f.get("label")), col(f.get("value"))
         if labels_ is None or values is None:

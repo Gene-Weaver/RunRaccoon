@@ -57,6 +57,7 @@ class Panel:
     series: list[Series]
     goal: str | None = None          # "min" | "max" | None
     x_label: str = "step"
+    x_key: str = "_step"             # the row field used as x (epoch, a step_metric, or _step)
 
     @property
     def is_loss(self) -> bool:
@@ -75,15 +76,17 @@ class Panel:
             return None
         s = self.primary()
         pts = [(x, y) for x, y in zip(s.x, s.y) if y is not None and math.isfinite(y)]
-        if len(pts) < 2:
+        if len(pts) < 2 or len({y for _, y in pts}) == 1:       # nothing to mark on a constant series
             return None
         x, y = (min if self.goal == "min" else max)(pts, key=lambda p: p[1])
         return s, x, y
 
-    def to_json(self, max_points: int | None = None) -> dict:
+    def to_json(self, max_points: int | None = None, best_row: dict | None = None) -> dict:
         best = self.best()
         out = {"id": self.id, "title": self.title, "section": self.section, "goal": self.goal,
                "x_label": self.x_label, "series": []}
+        if best_row is not None and _num(best_row.get(self.x_key)) is not None:
+            out["checkpoint_x"] = _num(best_row.get(self.x_key))
         for s in self.series:
             x, y = (s.x, s.y) if not max_points else downsample(s.x, s.y, max_points)
             out["series"].append({"key": s.key, "label": s.label, "role": s.role, "x": x,
@@ -215,7 +218,7 @@ def build_sections(rows: list[dict], metric_defs: Iterable[dict] | None = None,
             goal = spec.get("goal") or ({"min": "min", "max": "max"}.get(spec.get("summary", "")) or guess_goal(base))
             goal = {"minimize": "min", "maximize": "max"}.get(goal, goal)
             x_label = x_metric or x_label_hint or "step"
-            panel = panels[pid] = Panel(pid, title, section, [], goal, x_label)
+            panel = panels[pid] = Panel(pid, title, section, [], goal, x_label, x_metric or "_step")
         panel.series.append(Series(key, role or title, role, xs, ys))
 
     for p in panels.values():
@@ -254,8 +257,124 @@ def _epoch_is_usable(rows: list[dict]) -> set[str]:
     return out
 
 
+# ------------------------------------------------------------------------ best checkpoint
+_ULTRA_MAP5095 = re.compile(r"^metrics/mAP50-95\((\w+)\)$")
+_VAL_LOSS_KEYS = ("val/loss", "val_loss", "validation/loss", "valid/loss", "eval/loss")
+
+
+def _version_tuple(v: str) -> tuple:
+    return tuple(int(p) for p in re.findall(r"\d+", v)[:3])
+
+
+def ultralytics_version(requirements_txt: str) -> str | None:
+    m = re.search(r"(?im)^ultralytics==([\w.]+)", requirements_txt or "")
+    return m.group(1) if m else None
+
+
+def _argbest(rows: list[dict], score, goal: str):
+    """(row, value) of the best row. Only a strictly better value replaces the incumbent, so ties
+    keep the earliest step - the same rule Ultralytics uses for best.pt."""
+    best = None
+    for row in rows:
+        v = score(row)
+        if v is None or not math.isfinite(v):
+            continue
+        if best is None or (v > best[1] if goal == "max" else v < best[1]):
+            best = (row, v)
+    return best
+
+
+def best_checkpoint(rows: list[dict], metric_defs: Iterable[dict] | None = None,
+                    ultralytics_ver: str | None = None) -> dict | None:
+    """Which step would be kept as the "best" model if training stopped now.
+
+    1. `define_metric(key, summary="min"|"max")` or `goal=` (wandb's way to mark the metric
+       that decides "best") - the first such exact key wins.
+    2. Ultralytics runs (metrics/mAP50-95(B) etc. logged): best.pt fitness, version-matched:
+       >= 8.3.198 sums mAP50-95 over box + pose/mask; older uses 0.1*mAP50 + 0.9*mAP50-95.
+       Only per-epoch rows (with train/* losses) count, so the post-training re-validation of
+       best.pt is never itself picked.
+    3. Otherwise the lowest validation loss.
+    """
+    for d in metric_defs or []:
+        name = d.get("name", "")
+        goal = d.get("goal") or (d.get("summary") if d.get("summary") in ("min", "max") else None)
+        goal = {"minimize": "min", "maximize": "max"}.get(goal, goal)
+        if goal in ("min", "max") and name and not any(c in name for c in "*?["):
+            hit = _argbest(rows, lambda r, n=name: _num(r.get(n)), goal)
+            if hit:
+                return {"row": hit[0], "value": hit[1], "rule": f"{goal} {name}", "source": "define_metric"}
+
+    suffixes = sorted({m.group(1) for r in rows for k in r if (m := _ULTRA_MAP5095.match(k))})
+    if suffixes:
+        old = ultralytics_ver is not None and _version_tuple(ultralytics_ver) < (8, 3, 198)
+        w50, w95 = (0.1, 0.9) if old else (0.0, 1.0)
+
+        def fitness(r: dict) -> float | None:
+            if not any(k.startswith("train/") for k in r):
+                return None
+            total = 0.0
+            for s in suffixes:
+                m95, m50 = _num(r.get(f"metrics/mAP50-95({s})")), _num(r.get(f"metrics/mAP50({s})"))
+                if m95 is None:
+                    return None
+                total += w95 * m95 + w50 * (m50 or 0.0)
+            return total
+
+        hit = _argbest(rows, fitness, "max")
+        if hit:
+            parts = [f"mAP50-95({s})" if not old else f"0.1·mAP50({s})+0.9·mAP50-95({s})" for s in suffixes]
+            return {"row": hit[0], "value": hit[1], "rule": "Ultralytics best.pt fitness = " + " + ".join(parts),
+                    "source": "ultralytics"}
+
+    for key in _VAL_LOSS_KEYS:
+        if any(key in r for r in rows):
+            hit = _argbest(rows, lambda r, k=key: _num(r.get(k)), "min")
+            if hit:
+                return {"row": hit[0], "value": hit[1], "rule": f"min {key}", "source": "val_loss"}
+    return None
+
+
+def estimate_end(rows: list[dict], total_epochs: Any) -> float | None:
+    """Projected wall-clock time training finishes, or None until it can be estimated.
+
+    Needs at least one completed epoch *including validation* (a row with val/ or metrics/ keys),
+    so the projection covers a full train+val cycle. Uses absolute `_timestamp`s (robust to
+    resumes): last completed epoch + remaining epochs x median duration of recent epochs
+    (with one epoch done, its duration - incl. startup - is the estimate).
+    """
+    if not isinstance(total_epochs, int) or isinstance(total_epochs, bool) or total_epochs <= 0:
+        return None
+    done = [r["_timestamp"] for r in rows
+            if isinstance(r.get("_timestamp"), (int, float))
+            and any(k.startswith(("val/", "val_", "metrics/", "validation/")) for k in r)
+            and any(not k.startswith("_") for k in r)]
+    done = done[:total_epochs]                 # e.g. Ultralytics' extra re-validation of best.pt
+    if not done:
+        return None
+    if len(done) == 1:
+        first = next((r["_timestamp"] - r.get("_runtime", 0) for r in rows if isinstance(r.get("_timestamp"), (int, float))), None)
+        if first is None:
+            return None
+        per_epoch = done[0] - first
+    else:
+        recent = done[-11:]
+        diffs = sorted(b - a for a, b in zip(recent, recent[1:]))
+        per_epoch = diffs[len(diffs) // 2]
+    return done[-1] + max(0, total_epochs - len(done)) * per_epoch
+
+
 def flat_panels(sections: list[Section]) -> list[Panel]:
     return [p for s in sections for p in s.panels]
+
+
+def training_rows(rows: list[dict], config: dict) -> list[dict]:
+    """Rows of the training epochs only. Ultralytics logs a post-training re-validation of best.pt
+    at step epochs+1; plotted as "epoch 51 of 50" it would misreport where the best value was."""
+    epochs = config.get("epochs")
+    if isinstance(epochs, int) and not isinstance(epochs, bool) and x_label_hint(rows, config) == "epoch":
+        return [r for r in rows if not (isinstance(r.get("_step"), (int, float)) and r["_step"] > epochs)]
+    return rows
 
 
 def x_label_hint(rows: list[dict], config: dict) -> str | None:

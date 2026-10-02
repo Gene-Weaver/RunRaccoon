@@ -126,6 +126,10 @@ def init(project: str | None = None, entity: str | None = None, name: str | None
             else:                                   # default / True / "finish_previous"
                 current.finish()
 
+    # Ultralytics names its own runs' project after the output path with "/" -> "-"
+    # (e.g. "-home-me-runs-exp"); prefer the script's WANDB_PROJECT over that.
+    if project and project.startswith("-") and env.get("WANDB_PROJECT"):
+        project = env["WANDB_PROJECT"]
     project = project or env.get("WANDB_PROJECT") or "uncategorized"
     base_dir = os.fspath(dir) if dir else env.get("WANDB_DIR") or os.getcwd()
     run_id = id or env.get("WANDB_RUN_ID")

@@ -22,6 +22,7 @@ from runraccoon.config import Config
 from runraccoon.media import Audio, Histogram, Html, Image, Table, Video
 from runraccoon import plot
 from runraccoon.plot import plot_table
+from runraccoon.qc import ContactSheet
 from runraccoon.reader import RunData
 from runraccoon.run import Run
 from runraccoon.sdk import (AlertLevel, Api, alert, define_metric, finish, init, log, log_artifact, log_model,
@@ -38,7 +39,7 @@ summary: Summary = Summary()
 
 __all__ = ["__version__", "init", "log", "finish", "define_metric", "save", "log_artifact", "log_model",
            "use_artifact", "alert", "watch", "unwatch", "login", "setup", "teardown", "Run", "Settings",
-           "Config", "Summary", "Image", "Table", "Histogram", "Video", "Audio", "Html", "Artifact", "plot",
+           "Config", "Summary", "Image", "ContactSheet", "Table", "Histogram", "Video", "Audio", "Html", "Artifact", "plot",
            "plot_table", "RunData", "Api", "AlertLevel", "run", "config", "summary", "install_as_wandb",
            "uninstall_as_wandb"]
 

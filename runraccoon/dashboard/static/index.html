@@ -18,6 +18,10 @@
       </header>
       <input id="run-filter" class="search" type="search" placeholder="Filter runs" aria-label="Filter runs">
       <nav id="run-list" class="run-list"></nav>
+      <section id="hidden-runs" class="hidden-runs" hidden>
+        <button id="hidden-toggle" class="hidden-toggle" type="button" aria-expanded="false" aria-controls="hidden-list"></button>
+        <div id="hidden-list" class="run-list hidden-list" hidden></div>
+      </section>
     </aside>
 
     <main class="main">
@@ -31,6 +35,7 @@
           <div class="run-title-row">
             <h1 id="run-name"></h1>
             <span id="run-status" class="status"></span>
+            <span id="run-star" class="header-star" title="Starred" hidden>★</span>
           </div>
           <div id="run-meta" class="run-meta"></div>
         </header>
@@ -39,6 +44,7 @@
           <button role="tab" data-tab="charts" aria-selected="true">Charts</button>
           <button role="tab" data-tab="media">Media</button>
           <button role="tab" data-tab="plots">Plots</button>
+          <button role="tab" data-tab="gifs">GIFs</button>
           <button role="tab" data-tab="summary">Summary</button>
           <button role="tab" data-tab="config">Config</button>
           <button role="tab" data-tab="logs">Logs</button>
@@ -51,11 +57,19 @@
               <output id="smoothing-out">0</output>
             </label>
             <input id="chart-filter" class="search small" type="search" placeholder="Filter metrics" aria-label="Filter metrics">
+            <span id="checkpoint-legend" class="checkpoint-legend" hidden>
+              <span class="checkpoint-swatch" aria-hidden="true"></span>
+              <span id="checkpoint-text"></span>
+            </span>
           </div>
           <div id="sections"></div>
         </div>
         <div class="tab-body" data-panel="media" hidden><div id="media" class="media-grid"></div></div>
         <div class="tab-body" data-panel="plots" hidden><div id="plots" class="plot-grid"></div></div>
+        <div class="tab-body" data-panel="gifs" hidden>
+          <div id="gif-controls" class="card gif-controls"></div>
+          <div id="gifs" class="plot-grid"></div>
+        </div>
         <div class="tab-body" data-panel="summary" hidden>
           <input id="summary-filter" class="search small" type="search" placeholder="Filter keys" aria-label="Filter summary keys">
           <table id="summary" class="kv"></table>
@@ -66,6 +80,31 @@
     </main>
   </div>
   <div id="tooltip" class="tooltip" role="status" hidden></div>
+  <div id="run-menu" class="run-menu" role="menu" hidden></div>
+
+  <!-- Image viewer: media (with the step slider) and rendered plots. Esc / click outside closes. -->
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
+    <div class="viewer-head">
+      <h2 id="viewer-title"></h2>
+      <span id="viewer-note" class="card-note"></span>
+      <a id="viewer-open" class="viewer-link" target="_blank" rel="noopener">Open original ↗</a>
+      <button id="viewer-close" class="viewer-btn" aria-label="Close viewer">✕</button>
+    </div>
+    <div class="viewer-body"><img id="viewer-img" alt=""></div>
+    <div id="viewer-caption" class="caption"></div>
+    <div id="viewer-pager" class="viewer-pager" hidden>
+      <button id="viewer-iprev" class="viewer-btn" aria-label="Previous image">‹</button>
+      <span id="viewer-index"></span>
+      <button id="viewer-inext" class="viewer-btn" aria-label="Next image">›</button>
+    </div>
+    <div id="viewer-controls" class="viewer-controls">
+      <button id="viewer-prev" class="viewer-btn" aria-label="Previous step">‹</button>
+      <input id="viewer-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Step">
+      <button id="viewer-next" class="viewer-btn" aria-label="Next step">›</button>
+      <output id="viewer-step"></output>
+    </div>
+    <div class="viewer-hint">← → step · ↑ ↓ image · Esc close</div>
+  </dialog>
   <script src="/static/app.js"></script>
 </body>
 </html>

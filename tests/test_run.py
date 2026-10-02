@@ -163,3 +163,24 @@ def test_registry_status():
     assert registry.status(registry.read(run.id)) == "running"
     wandb.finish()
     assert registry.status(registry.read(run.id)) == "finished"
+
+
+def test_ultralytics_path_project_prefers_env(monkeypatch):
+    monkeypatch.setenv("WANDB_PROJECT", "FieldPrism_YOLO12")
+    run = wandb.init(project="-home-me-raccoon_demos-bbox-FieldPrism_YOLO12")
+    assert run.project == "FieldPrism_YOLO12"
+
+
+def test_epoch_numbered_image_keys_become_one_series():
+    from runraccoon.reader import media_series_key
+    assert media_series_key("val/inputs_epoch9") == ("val/inputs", 9)
+    assert media_series_key("val/preds-step-12") == ("val/preds", 12)
+    assert media_series_key("split3") == ("split3", None) and media_series_key("qc/panels") == ("qc/panels", None)
+    run = wandb.init()
+    for ep in (1, 2, 3):                                     # the LM3 UNet / BiRefNet logging pattern
+        wandb.log({f"val/preds_epoch{ep}": wandb.Image(np.full((8, 8, 3), ep * 40, np.uint8)), "epoch": ep})
+    p = _paths(run)
+    wandb.finish()
+    from runraccoon.reader import RunData
+    refs = RunData(p).media_refs()
+    assert list(refs) == ["val/preds"] and [r["step"] for r in refs["val/preds"]] == [1, 2, 3]

@@ -7,6 +7,7 @@ and lets one dashboard watch runs from many processes.
 from __future__ import annotations
 
 import json
+import re
 from functools import cached_property
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,16 @@ def read_config_yaml(path: Path) -> dict:
     except Exception:          # yaml.YAMLError
         return {}
     return {k: (v["value"] if isinstance(v, dict) and "value" in v else v) for k, v in raw.items()}
+
+
+_SERIES_SUFFIX = re.compile(r"^(?P<base>.+?)[_\-](?:epoch|step|iter)[_\-]?(?P<n>\d+)$", re.I)
+
+
+def media_series_key(key: str) -> tuple[str, int | None]:
+    """`val/inputs_epoch9` -> ("val/inputs", 9). Scripts that put the epoch in the key name log a new
+    key every epoch; folding them back into one series gives them a step slider and a GIF."""
+    m = _SERIES_SUFFIX.match(key)
+    return (m.group("base"), int(m.group("n"))) if m else (key, None)
 
 
 class RunData:
@@ -79,17 +90,24 @@ class RunData:
         return self.wandb_internal.get("project")
 
     def media_refs(self) -> dict[str, list[dict[str, Any]]]:
-        """{key: [{"step", "path", "caption", ...}, ...]} for every logged image."""
+        """{key: [{"step", "path", "caption", ...}, ...]} for every logged image. Keys that carry the
+        epoch in their name (`val/preds_epoch12`) are folded into one series (`val/preds`) whose step
+        is that number."""
         out: dict[str, list[dict]] = {}
         for row in self.rows:
-            step = row.get("_step")
-            for key, val in row.items():
+            for raw_key, val in row.items():
+                key, n = media_series_key(raw_key)
+                step = n if n is not None else row.get("_step")
                 if not isinstance(val, dict):
                     continue
                 t = val.get("_type")
                 if t == "image-file":
-                    out.setdefault(key, []).append({"step": step, "path": val["path"], "caption": val.get("caption"),
-                                                    "width": val.get("width"), "height": val.get("height")})
+                    ref = {"step": step, "path": val["path"], "caption": val.get("caption"),
+                           "width": val.get("width"), "height": val.get("height")}
+                    if isinstance(val.get("_runraccoon_sheet"), dict):
+                        ref["boxes"] = val["_runraccoon_sheet"].get("boxes")      # ContactSheet tile positions
+                        ref["qc"] = val["_runraccoon_sheet"].get("qc")            # QCSheet overlay data (restylable)
+                    out.setdefault(key, []).append(ref)
                 elif t == "images/separated":
                     caps = val.get("captions") or [None] * len(val.get("filenames", []))
                     for i, (fn, cap) in enumerate(zip(val.get("filenames", []), caps)):

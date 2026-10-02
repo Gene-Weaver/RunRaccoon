@@ -6,6 +6,7 @@
              files/plots/summary/<section>.<fmt>             every chart, one figure per section
              files/plots/charts/<key>.<fmt>                  custom charts (PR curves, confusion matrix, ...)
              files/plots/history.csv                         every scalar, one row per step
+             files/plots/gifs/<key>.gif (+ <key>/panel_NN.gif) training-progress GIFs of QC images
 
 Runs in its own process (`python -m runraccoon render <run_dir>`) so plotting never competes
 with training for the GIL and never touches the training script's matplotlib state.
@@ -20,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from runraccoon.panels import Panel, Section, build_sections, classify, flat_panels, guess_goal, x_label_hint
+from runraccoon.panels import Panel, Section, build_sections, classify, flat_panels, guess_goal, training_rows, x_label_hint
 from runraccoon.reader import RunData
 from runraccoon.utils import format_duration, format_value, safe_relpath
 
@@ -128,7 +129,7 @@ def render_charts(data: RunData, formats: Iterable[str], dpi: int) -> list[Path]
 
 
 def render_run(run_dir: str | Path, final: bool = False, formats: Sequence[str] = ("png",),
-               status: str | None = None) -> list[Path]:
+               status: str | None = None, gifs: bool = True) -> list[Path]:
     from runraccoon.plotting import style
     from runraccoon.plotting.figures import progress_figure, report_figure, section_figure
 
@@ -142,7 +143,8 @@ def render_run(run_dir: str | Path, final: bool = False, formats: Sequence[str] 
     live_patterns = data.wandb_internal.get("live_metrics") or None
     written: list[Path] = []
 
-    live_sections = build_sections(rows, data.metric_defs, include=live_patterns, live=True, x_label_hint=hint)
+    chart_rows = training_rows(rows, data.config)
+    live_sections = build_sections(chart_rows, data.metric_defs, include=live_patterns, live=True, x_label_hint=hint)
     subtitle = _subtitle(data, rows, flat_panels(live_sections), status)
     fig = progress_figure(flat_panels(live_sections), title, subtitle, run_dir_s)
     if fig is not None:
@@ -151,7 +153,7 @@ def render_run(run_dir: str | Path, final: bool = False, formats: Sequence[str] 
     if final:
         import shutil
         shutil.rmtree(data.paths.plots / "summary", ignore_errors=True)      # no stale sections
-        sections: list[Section] = build_sections(rows, data.metric_defs, live=False, x_label_hint=hint)
+        sections: list[Section] = build_sections(chart_rows, data.metric_defs, live=False, x_label_hint=hint)
         key_panels = [p for p in flat_panels(live_sections) if p.series]
         report = report_figure(key_panels[:8], headline_tiles(flat_panels(sections), data.summary), title,
                                subtitle, run_dir_s)
@@ -164,6 +166,9 @@ def render_run(run_dir: str | Path, final: bool = False, formats: Sequence[str] 
                     written.append(_save(f, data.paths.plots / "summary" / f"{_slug(sec.name)}.{fmt}", fmt, 200))
         if rows:
             written.append(write_history_csv(rows, data.paths.plots / "history.csv"))
+        if gifs and (data.wandb_internal.get("gif") or {}).get("enabled", True):
+            from runraccoon.plotting.gifs import render_gifs, saved_options
+            written.extend(render_gifs(data, saved_options(data), x_word=hint or "step"))
     written.extend(render_charts(data, formats if final else ("png",), 200))
     return written
 

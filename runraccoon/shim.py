@@ -26,6 +26,8 @@ def install_as_wandb() -> None:
         log.warning("the real wandb package was imported before runraccoon; code that already "
                     "holds a reference to it is not redirected. Import runraccoon first.")
     sys.modules["wandb"] = module
+    from runraccoon.integrations import ultralytics as _ultralytics
+    _ultralytics.install()        # per-epoch QC contact sheet for Ultralytics training
     # Common submodule paths some code imports directly.
     sys.modules.setdefault("wandb.plot", module.plot)
     if not os.environ.get("WANDB_MODE"):
