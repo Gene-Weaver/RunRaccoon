@@ -28,6 +28,7 @@ from runraccoon.history import iter_rows, merge_rows
 from runraccoon.panels import build_sections, x_label_hint
 from runraccoon.paths import RunPaths
 from runraccoon.reader import RunData, read_config_yaml
+from runraccoon.settings import DEFAULT_PORT
 from runraccoon.utils import json_safe
 
 STATIC = Path(__file__).with_name("static")
@@ -73,7 +74,7 @@ class _RunCache:
 
 
 class Dashboard:
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765, idle_exit_s: float | None = None):
+    def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, idle_exit_s: float | None = None):
         self.host, self.port, self.idle_exit_s = host, port, idle_exit_s
         self._caches: dict[str, _RunCache] = {}
         self._lock = threading.Lock()
@@ -243,7 +244,7 @@ def _public(rec: dict) -> dict:
     return {k: rec.get(k) for k in keys}
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, idle_exit_s: float | None = None, open_browser: bool = True) -> None:
+def serve(host: str = "127.0.0.1", port: int = DEFAULT_PORT, idle_exit_s: float | None = None, open_browser: bool = True) -> None:
     app = Dashboard(host, port, idle_exit_s)
     url = f"http://{host}:{port}/"
     if open_browser:

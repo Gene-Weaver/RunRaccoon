@@ -3,7 +3,7 @@
 RunRaccoon-specific options (all optional, all overridable by environment variables):
 
     dashboard        auto-start the localhost dashboard on init      RUNRACCOON_DASHBOARD=0/1
-    dashboard_port   port for the dashboard                          RUNRACCOON_PORT=8765
+    dashboard_port   port for the dashboard                          RUNRACCOON_PORT=8473
     live_plots       re-render files/plots/progress.png during runs  RUNRACCOON_LIVE_PLOTS=0/1
     final_plots      render the summary figures in finish()          RUNRACCOON_FINAL_PLOTS=0/1
     plot_every_s     minimum seconds between live re-renders         RUNRACCOON_PLOT_EVERY_S=10
@@ -19,6 +19,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, fields
 from typing import Any
+
+
+DEFAULT_PORT = 8473      # dashboard port; override with RUNRACCOON_PORT
+
+
+def default_port() -> int:
+    return int(os.environ.get("RUNRACCOON_PORT", DEFAULT_PORT))
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -38,7 +45,7 @@ def _env_list(name: str, default):
 @dataclass
 class Settings:
     dashboard: bool = field(default_factory=lambda: _env_bool("RUNRACCOON_DASHBOARD", True))
-    dashboard_port: int = field(default_factory=lambda: int(os.environ.get("RUNRACCOON_PORT", "8765")))
+    dashboard_port: int = field(default_factory=default_port)
     live_plots: bool = field(default_factory=lambda: _env_bool("RUNRACCOON_LIVE_PLOTS", True))
     final_plots: bool = field(default_factory=lambda: _env_bool("RUNRACCOON_FINAL_PLOTS", True))
     plot_every_s: float = field(default_factory=lambda: float(os.environ.get("RUNRACCOON_PLOT_EVERY_S", "10")))

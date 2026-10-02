@@ -1,3 +1,9 @@
+# Secrets - never commit (PyPI tokens, env files)
+.pypirc
+*.pypirc
+.env
+.env.*
+
 # Python
 __pycache__/
 *.py[cod]

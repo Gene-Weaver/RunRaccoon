@@ -89,7 +89,7 @@ When the run starts, RunRaccoon prints where everything goes:
 
 ```text
 runraccoon: started run unet-baseline (k3x9q2ab) -> outputs/unet-baseline/runraccoon/run-20261002_105640-k3x9q2ab
-runraccoon: live dashboard -> http://127.0.0.1:8765/#run=k3x9q2ab
+runraccoon: live dashboard -> http://127.0.0.1:8473/#run=k3x9q2ab
 ```
 
 `finish()` prints a short wandb-style summary with sparklines and the paths to the plots.
@@ -172,7 +172,7 @@ runraccoon replot path/to/outputs/unet-baseline --formats png,pdf
 
 ![Dashboard](https://raw.githubusercontent.com/Gene-Weaver/RunRaccoon/main/docs/images/dashboard.png)
 
-The first run on the machine starts a small server on `http://127.0.0.1:8765` (localhost only).
+The first run on the machine starts a small server on `http://127.0.0.1:8473` (localhost only).
 Every later run, in any process or environment, registers with it.
 
 **Left panel**
@@ -279,7 +279,7 @@ dict), or set them through the environment:
 | Setting | Env var | Default | Meaning |
 |---|---|---|---|
 | `dashboard` | `RUNRACCOON_DASHBOARD` | `1` | auto-start the localhost dashboard |
-| `dashboard_port` | `RUNRACCOON_PORT` | `8765` | dashboard port |
+| `dashboard_port` | `RUNRACCOON_PORT` | `8473` | dashboard port (also used by `runraccoon dashboard`) |
 | `live_plots` | `RUNRACCOON_LIVE_PLOTS` | `1` | refresh `progress.png` during training |
 | `plot_every_s` | `RUNRACCOON_PLOT_EVERY_S` | `10` | minimum seconds between refreshes (at most once per epoch either way) |
 | `final_plots` | `RUNRACCOON_FINAL_PLOTS` | `1` | render the summary figures in `finish()` |
@@ -299,7 +299,7 @@ The usual wandb variables are honored as defaults: `WANDB_PROJECT`, `WANDB_NAME`
 ## Command line
 
 ```text
-runraccoon dashboard [--port 8765]     open the dashboard (all runs, live + past)
+runraccoon dashboard [--port 8473]     open the dashboard (all runs, live + past)
 runraccoon ls [--all]                  list runs and their status
 runraccoon replot <run dir | id>       re-render every figure for a run  [--formats png,pdf]
 runraccoon register <folder>...        add existing/moved run folders to the dashboard
@@ -321,7 +321,7 @@ runraccoon gc                          forget runs whose folders were deleted
         │ writes files/plots/*.png                           │
         │                                                    │
         └ heartbeat ─▶ ~/.runraccoon/runs/<id>.json ◀─ reads ─ dashboard server
-                                                              127.0.0.1:8765
+                                                              127.0.0.1:8473
 ```
 
 - **The training process only writes files.** Media is hashed and written when logged, and

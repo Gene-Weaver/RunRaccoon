@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Default dashboard port changed from 8765 to 8473 (8765 is commonly taken by other local apps).
+- `runraccoon dashboard` now honors `RUNRACCOON_PORT`, the same variable training runs use.
+- Dashboard sidebar: removed the subtitle under the RunRaccoon name.
+- Source distributions explicitly exclude `.pypirc` and `.env`.
+
 ## 0.1.0
 
 - First release.

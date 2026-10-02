@@ -1,6 +1,6 @@
 """`runraccoon` command line.
 
-    runraccoon dashboard [--port 8765]     open the localhost dashboard (all runs, live + past)
+    runraccoon dashboard [--port 8473]     open the localhost dashboard (all runs, live + past)
     runraccoon ls [--all]                  list runs and their status
     runraccoon replot <run dir | id>       re-render every figure for a run (e.g. after a crash)
     runraccoon register <dir>...           add existing run folders (moved / copied) to the dashboard
@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from runraccoon import registry
+from runraccoon.settings import default_port
 from runraccoon.utils import format_duration
 
 
@@ -123,7 +124,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("dashboard", help="open the localhost dashboard")
-    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--port", type=int, default=default_port(), help="default: $RUNRACCOON_PORT or 8473")
     p.add_argument("--host", default="127.0.0.1", help="bind address (default: localhost only)")
     p.add_argument("--idle-exit", type=float, default=None, help="exit after N seconds with no active runs")
     p.add_argument("--no-browser", action="store_true")
